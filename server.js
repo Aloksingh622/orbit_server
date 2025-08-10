@@ -88,6 +88,15 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("cancel-call", ({ to }) => {
+  debugLog("Call canceled by caller", { to });
+  const toSocketId = getSocketIdByUserId(to);
+  if (toSocketId) {
+    // Tell the recipient's modal to close
+    io.to(toSocketId).emit("call-canceled");
+  }
+});
+
 
   // WEBRTC SIGNALING (This part is already correct) ===================
   socket.on("webrtc-offer", ({ to, from, offer }) => {
