@@ -80,6 +80,17 @@ io.on("connection", (socket) => {
     }
   });
 
+  // In server.js
+
+socket.on("callee-ready", ({ to }) => {
+  debugLog("Callee is ready, telling caller to initiate", { to });
+  const toSocketId = getSocketIdByUserId(to);
+  if (toSocketId) {
+    // Tell the original caller to start the offer process
+    io.to(toSocketId).emit("initiate-offer", {});
+  }
+});
+
   socket.on("call-rejected", ({ from, to }) => { // It's good practice to also send 'from' here
     debugLog("Call rejected", { from, to });
     const toSocketId = getSocketIdByUserId(to);
