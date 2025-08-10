@@ -47,7 +47,6 @@ function debugLog(message, data = null) {
 io.on("connection", (socket) => {
   debugLog("User connected", { socketId: socket.id });
 
-  // Have user register their userId upon connection
   socket.on("register", (userId) => {
     if (!userId) {
       debugLog("Registration failed: No userId provided", { socketId: socket.id });
@@ -57,52 +56,49 @@ io.on("connection", (socket) => {
     debugLog("User registered successfully", { userId, socketId: socket.id });
   });
 
-  // PRE-CALL SIGNALING (This part is mostly the same and looks great)
-  socket.on("outgoing-call", ({ from, to }) => {
-    debugLog("Outgoing call request", { from, to });
+  // PRE-CALL SIGNALING =====================
+
+  // MODIFICATION 1: Added 'type'
+  socket.on("outgoing-call", ({ from, to, type = 'voice' }) => {
+    debugLog("Outgoing call request", { from, to, type });
     const toSocketId = getSocketIdByUserId(to);
     if (toSocketId) {
-      io.to(toSocketId).emit("incoming-call", { from });
-      debugLog("Sending incoming call to recipient", { from, to, toSocketId });
+      io.to(toSocketId).emit("incoming-call", { from, type }); // Forwarding 'type'
+      debugLog("Sending incoming call to recipient", { from, to, toSocketId, type });
     } else {
       socket.emit("call-error", { error: "User is not online." });
       debugLog("Recipient not found", { to });
     }
   });
 
-  socket.on("call-accepted", ({ to }) => {
-    debugLog("Call accepted", { to });
+  // MODIFICATION 2: Richer payload for specific confirmation
+  socket.on("call-accepted", ({ from, to, callType }) => {
+    debugLog("Call accepted", { from, to, callType });
     const toSocketId = getSocketIdByUserId(to);
     if (toSocketId) {
-      io.to(toSocketId).emit("call-accepted", {});
+      io.to(toSocketId).emit("call-accepted", { from, callType }); // Forward 'from' and 'callType'
     }
   });
 
-  socket.on("call-rejected", ({ to }) => {
-    debugLog("Call rejected", { to });
+  socket.on("call-rejected", ({ from, to }) => { // It's good practice to also send 'from' here
+    debugLog("Call rejected", { from, to });
     const toSocketId = getSocketIdByUserId(to);
     if (toSocketId) {
-      io.to(toSocketId).emit("call-rejected", {});
+      io.to(toSocketId).emit("call-rejected", { from }); // Tell the caller WHO rejected
     }
   });
 
 
-  // ===================================================================
-  // == WEBRTC SIGNALING (Main area of change for synchronization) ==
-  // ===================================================================
-
-  // Renamed from "offer" to "webrtc-offer" to match the frontend
+  // WEBRTC SIGNALING (This part is already correct) ===================
   socket.on("webrtc-offer", ({ to, from, offer }) => {
     debugLog("WebRTC offer received", { to, from });
     const toSocketId = getSocketIdByUserId(to);
     if (toSocketId) {
-      // Forward the offer and who it is from
       socket.to(toSocketId).emit("webrtc-offer", { from, offer });
       debugLog("WebRTC offer forwarded", { to, toSocketId });
     }
   });
 
-  // Renamed from "answer" to "webrtc-answer"
   socket.on("webrtc-answer", ({ to, answer }) => {
     debugLog("WebRTC answer received", { to });
     const toSocketId = getSocketIdByUserId(to);
@@ -112,7 +108,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Renamed from "ice-candidate" to "webrtc-candidate"
   socket.on("webrtc-candidate", ({ to, candidate }) => {
     const toSocketId = getSocketIdByUserId(to);
     if (toSocketId) {
@@ -120,9 +115,7 @@ io.on("connection", (socket) => {
     }
   });
   
-  // ===================================================================
-
-  // Handle call end/cleanup
+  // OTHER HANDLERS (These are fine) =================================
   socket.on("end-call", ({ to }) => {
     debugLog("Call ended", { to });
     const toSocketId = getSocketIdByUserId(to);
