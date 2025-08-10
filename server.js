@@ -29,33 +29,79 @@ app.use('/api/message', messageRouter);
 
 const io = new Server(server, {
   cors: {
-    origin: "*", // allow all for testing
-    methods: ["GET", "POST"]
-  }
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
 });
 
-// WebRTC signaling events
+const userSocketMap = {}; // Maps your app's userId to a socket.id
+
+function getSocketIdByUserId(userId) {
+  return userSocketMap[userId];
+}
+
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
-  socket.on("join-room", (roomId) => {
-    socket.join(roomId);
-    console.log(`User ${socket.id} joined room ${roomId}`);
+  // Have user register their userId upon connection
+  socket.on("register", (userId) => {
+    userSocketMap[userId] = socket.id;
+    console.log(`User ${userId} registered with socket ${socket.id}`);
   });
 
+  // PRE-CALL SIGNALING =====================
+  socket.on("outgoing-call", ({ from, to }) => {
+    const toSocketId = getSocketIdByUserId(to);
+    if (toSocketId) {
+      // Send invitation to the specific user
+      io.to(toSocketId).emit("incoming-call", { from });
+    }
+  });
+
+  socket.on("call-accepted", ({ to }) => {
+    const toSocketId = getSocketIdByUserId(to);
+    if (toSocketId) {
+      io.to(toSocketId).emit("call-accepted", {});
+    }
+  });
+
+  socket.on("call-rejected", ({ to }) => {
+    const toSocketId = getSocketIdByUserId(to);
+     if (toSocketId) {
+      io.to(toSocketId).emit("call-rejected", {});
+    }
+  });
+  
+  // WEBRTC SIGNALING (Your existing code is mostly fine) ============
   socket.on("offer", ({ to, offer }) => {
-    socket.to(to).emit("offer", { offer });
+    const toSocketId = getSocketIdByUserId(to);
+    if(toSocketId) {
+       socket.to(toSocketId).emit("offer", { offer });
+    }
   });
 
   socket.on("answer", ({ to, answer }) => {
-    socket.to(to).emit("answer", { answer });
+    const toSocketId = getSocketIdByUserId(to);
+     if(toSocketId) {
+       socket.to(toSocketId).emit("answer", { answer });
+    }
   });
 
   socket.on("ice-candidate", ({ to, candidate }) => {
-    socket.to(to).emit("ice-candidate", { candidate });
+    const toSocketId = getSocketIdByUserId(to);
+    if(toSocketId) {
+      socket.to(toSocketId).emit("ice-candidate", { candidate });
+    }
   });
 
   socket.on("disconnect", () => {
+    // Clean up the map on disconnect
+    for (const userId in userSocketMap) {
+      if (userSocketMap[userId] === socket.id) {
+        delete userSocketMap[userId];
+        break;
+      }
+    }
     console.log("User disconnected:", socket.id);
   });
 });
