@@ -90,6 +90,14 @@ socket.on("callee-ready", ({ to }) => {
     io.to(toSocketId).emit("initiate-offer", {});
   }
 });
+socket.on("hang-up", ({ to }) => {
+  debugLog("Hang-up signal received", { to });
+  const toSocketId = getSocketIdByUserId(to);
+  if (toSocketId) {
+    // Notify the other user that the call has ended
+    io.to(toSocketId).emit("call-ended");
+  }
+});
 
   socket.on("call-rejected", ({ from, to }) => { // It's good practice to also send 'from' here
     debugLog("Call rejected", { from, to });
