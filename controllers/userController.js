@@ -8,199 +8,6 @@ import { clerkClient } from "@clerk/express";
 
 
 
-// import bcrypt from 'bcryptjs';
-// import jwt from 'jsonwebtoken';
-// import redisclient from '../configs/redis.js'; // assuming you have this
-
-// export const register = async (req, res) => {
-//   try {
-  
-
-//     let { full_name, email, username, otp, password } = req.body;
-
-//     // OTP check from Redis
-//     const real_otp = await redisclient.get(`otp:${email}`);
-//     if (!real_otp) {
-//       return res.status(400).json({ message: "OTP is expired" });
-//     }
-//     if (real_otp !== otp) {
-//       return res.status(400).json({ message: "Invalid OTP" });
-//     }
-
-//     // Hash password
-//     const hashedPassword = await bcrypt.hash(password, 10);
-
-//     // Create user in MongoDB
-//     const newUser = await User.create({
-//       _id: new mongoose.Types.ObjectId().toString(), // custom string ID
-//       email,
-//       full_name,
-//       username,
-//       password: hashedPassword, // ⚠ add password field to schema if needed
-//       // other default fields will be filled automatically
-//     });
-
-//     // Generate JWT token
-//     const token = jwt.sign(
-//       { _id: newUser._id, email: email, full_name: full_name },
-//       process.env.private_key,
-//       { expiresIn: "1d" }
-//     );
-
-//     // Prepare response data
-//     const reply = {
-//       full_name: newUser.full_name,
-//       email: newUser.email,
-//       username: newUser.username,
-//       _id: newUser._id,
-//       createdAt: newUser.createdAt
-//     };
-
-//     // Set token cookie
-//     res.cookie("token", token, {
-//       sameSite: 'none',
-//       maxAge: 24 * 60 * 60 * 1000,
-//       overwrite: true,
-//       httpOnly: true,
-//       secure: true,
-//       domain: 'thealok.shop'
-//     });
-
-//     res.status(201).json({
-//       user: reply,
-//       message: "User registered successfully"
-//     });
-
-//   } catch (err) {
-//     res.status(400).send("Error: " + err.message);
-//   }
-// };
-
-
-// export const login = async (req, res) => {
-//     try {
-//         const { email, password } = req.body;
-
-//         // 1. Validate input
-//         if (!email || !password) {
-//             throw new Error("Invalid credentials");
-//         }
-
-//         // 2. Find user by email
-//         const real_user = await User.findOne({ email });
-//         if (!real_user) {
-//             throw new Error("Invalid credentials");
-//         }
-
-//         // 3. Compare password
-//         const match = await bcrypt.compare(password, real_user.password);
-//         if (!match) {
-//             throw new Error("Invalid credentials");
-//         }
-
-//         // 4. Create JWT token
-//         const token = jwt.sign(
-//             { _id: real_user._id, email: real_user.email, full_name: real_user.full_name },
-//             process.env.private_key,
-//             { expiresIn: "1d" }
-//         );
-
-//         // 5. Set cookie
-//         res.cookie("token", token, {
-//             sameSite: 'none',
-//             maxAge: 24 * 60 * 60 * 1000,
-//             overwrite: true,
-//             httpOnly: true,
-//             secure: true,
-//             domain: 'thealok.shop'
-//         });
-
-//         // 6. Prepare response
-//         const setpassword = !!real_user.password;
-//         const reply = {
-//             _id: real_user._id,
-//             full_name: real_user.full_name,
-//             email: real_user.email,
-//             username: real_user.username,
-//             bio: real_user.bio,
-//             profile_picture: real_user.profile_picture,
-//             cover_photo: real_user.cover_photo,
-//             location: real_user.location,
-//             followers: real_user.followers,
-//             following: real_user.following,
-//             connections: real_user.connections,
-//             createdAt: real_user.createdAt,
-//             setpassword
-//         };
-
-//         // 7. Send response
-//         res.status(200).json({
-//             user: reply,
-//             message: "Logged in successfully"
-//         });
-
-//     } catch (err) {
-//         res.status(401).send("Error: " + err.message);
-//     }
-// };
-// export const email_verification = async (req, res) => {
-//     try {
-//         const { email } = req.body;
-
-//         // 1. Validate input
-//         if (!email) {
-//             return res.status(400).json({ success: false, error: "Email is required" });
-//         }
-
-//         // 2. Check if user already exists
-//         const existingUser = await User.findOne({ email });
-//         if (existingUser) {
-//             return res.status(400).json({ success: false, error: "Email already registered" });
-//         }
-
-//         // 3. Create mail transporter
-//         const transporter = nodemailer.createTransport({
-//             service: "gmail",
-//             auth: {
-//                 user: process.env.SMTP_EMAIL,
-//                 pass: process.env.SMTP_PASSWORD,
-//             },
-//         });
-
-//         // 4. Generate OTP
-//         const otp = otp_generator.generate(6, {
-//             upperCaseAlphabets: false,
-//             lowerCaseAlphabets: false,
-//             specialChars: false,
-//             digits: true
-//         });
-
-//         // 5. Save OTP in Redis (expires in 5 minutes)
-//         await redisclient.set(`otp:${email}`, otp, { EX: 300 });
-
-//         // 6. Send OTP Email
-//         await transporter.sendMail({
-//             from: `"PingUp" <${process.env.SMTP_EMAIL}>`,
-//             to: email,
-//             subject: "Your PingUp OTP",
-//             html: `
-//                 <div style="font-family:sans-serif; padding:10px; color:#333">
-//                     <h2>Your OTP is: <span style="color:#3b82f6">${otp}</span></h2>
-//                     <p>This OTP is valid for <strong>5 minutes</strong>. Please do not share it with anyone.</p>
-//                     <br />
-//                     <p>– Team PingUp</p>
-//                 </div>
-//             `,
-//         });
-
-//         return res.status(200).json({ success: true, message: "OTP sent successfully" });
-
-//     } catch (err) {
-//         console.error("Email Verification Error:", err);
-//         return res.status(500).json({ success: false, error: err.message || "Something went wrong" });
-//     }
-// };
-
 
 // Get User Data using userId
 export const getUserData = async (req, res) => {
@@ -217,6 +24,29 @@ export const getUserData = async (req, res) => {
     }
 }
 
+export const getUserById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Find the user by their ID and select only the fields you want to expose
+    const user = await User.findById(id).select(
+      'full_name username profile_picture bio'
+    );
+
+    if (user) {
+      res.status(200).json(user);
+    } else {
+      res.status(404).json({ message: 'User not found' });
+    }
+  } catch (error) {
+    console.error('Error fetching user by ID:', error);
+    // Handle cases where the provided ID is not a valid MongoDB ObjectId
+    if (error.kind === 'ObjectId') {
+        return res.status(400).json({ message: 'Invalid user ID format' });
+    }
+    res.status(500).json({ message: 'Server error while fetching user' });
+  }
+};
 //  Update User Data
 export const updateUserData = async (req, res) => {
     try {
