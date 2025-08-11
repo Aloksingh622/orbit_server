@@ -36,21 +36,28 @@ const io = new Server(server, {
 
 const userSocketMap = {};
 let randomCallPool = [];
+const noMatchTimeouts = {};
 
 
-const tryToMatchUsers = () => {
-  if (randomCallPool.length >= 2) {
-    // Pull the first two users from the pool
+const tryToMatchUsers = (io) => {
+  debugLog("Attempting to match users", { poolSize: randomCallPool.length });
+  while (randomCallPool.length >= 2) {
     const user1 = randomCallPool.shift();
     const user2 = randomCallPool.shift();
 
-    debugLog("Match found! Pairing users.", { user1: user1.userId, user2: user2.userId });
+    // Clear any pending "no match" timeouts for these users
+    if (noMatchTimeouts[user1.socketId]) clearTimeout(noMatchTimeouts[user1.socketId]);
+    if (noMatchTimeouts[user2.socketId]) clearTimeout(noMatchTimeouts[user2.socketId]);
+    delete noMatchTimeouts[user1.socketId];
+    delete noMatchTimeouts[user2.socketId];
 
-    // Notify both users about their new partner
+    debugLog("Match found!", { user1: user1.userId, user2: user2.userId });
+
     io.to(user1.socketId).emit('match-found', { partnerId: user2.userId });
     io.to(user2.socketId).emit('match-found', { partnerId: user1.userId });
   }
 };
+
 
 function getSocketIdByUserId(userId) {
   return userSocketMap[userId];
@@ -96,19 +103,41 @@ io.on("connection", (socket) => {
     }
   });
 
-    socket.on('join-random-pool', ({ from }) => {
-    // Avoid adding the same user twice
-    if (!randomCallPool.some(user => user.userId === from)) {
-      debugLog("User joined random call pool", { userId: from });
-      randomCallPool.push({ userId: from, socketId: socket.id });
-      tryToMatchUsers(); // Attempt to find a match
+   socket.on('join-random-pool', ({ userId }) => {
+    if (!randomCallPool.some(user => user.userId === userId)) {
+      debugLog("User joined random call pool", { userId });
+      randomCallPool.push({ userId, socketId: socket.id });
+
+      // If user is alone in the pool, set a timeout to notify them
+      if (randomCallPool.length === 1) {
+        noMatchTimeouts[socket.id] = setTimeout(() => {
+          socket.emit('no-match-found');
+          debugLog("No match found for user", { userId });
+        }, 15000); // 15-second timeout
+      }
+
+      tryToMatchUsers(io);
     }
   });
 
   socket.on('leave-random-pool', () => {
     const userId = Object.keys(userSocketMap).find(key => userSocketMap[key] === socket.id);
     randomCallPool = randomCallPool.filter(user => user.socketId !== socket.id);
+    if (noMatchTimeouts[socket.id]) {
+      clearTimeout(noMatchTimeouts[socket.id]);
+      delete noMatchTimeouts[socket.id];
+    }
     debugLog("User left random call pool", { userId });
+  });
+
+  // ▼▼ NEW HANDLER FOR SKIP ACTION ▼▼
+  socket.on('skip-partner', ({ to }) => {
+    debugLog("User skipped partner", { to });
+    const toSocketId = getSocketIdByUserId(to);
+    if (toSocketId) {
+      // Notify the other user that their partner skipped
+      io.to(toSocketId).emit("partner-skipped");
+    }
   });
 
   // In server.js
@@ -129,6 +158,7 @@ socket.on("hang-up", ({ to }) => {
     io.to(toSocketId).emit("call-ended");
   }
 });
+
 
   socket.on("call-rejected", ({ from, to }) => { // It's good practice to also send 'from' here
     debugLog("Call rejected", { from, to });
