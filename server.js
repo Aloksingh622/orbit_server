@@ -14,7 +14,7 @@ import storyRouter from './routes/storyRoutes.js';
 import messageRouter from './routes/messageRoutes.js';
 
 const app = express();
-const server = createServer(app); // Create HTTP server for socket.io
+const server = createServer(app);
 
 app.use(express.json());
 app.use(cors());
@@ -37,18 +37,32 @@ const io = new Server(server, {
 const userSocketMap = {};
 let randomCallPool = [];
 const noMatchTimeouts = {};
+const activeMatches = new Map(); // Track active matches to prevent duplicates
+
 const tryToMatchUsers = (io) => {
+  debugLog("Attempting to match users", { poolSize: randomCallPool.length });
+  
   while (randomCallPool.length >= 2) {
     const user1 = randomCallPool.shift();
     const user2 = randomCallPool.shift();
 
-    // Clear timeouts
+    // Skip if users are already matched
+    if (activeMatches.has(user1.userId) || activeMatches.has(user2.userId)) {
+      debugLog("Skipping already matched users", { user1: user1.userId, user2: user2.userId });
+      continue;
+    }
+
+    // Clear no-match timeouts
     if (noMatchTimeouts[user1.socketId]) clearTimeout(noMatchTimeouts[user1.socketId]);
     if (noMatchTimeouts[user2.socketId]) clearTimeout(noMatchTimeouts[user2.socketId]);
     delete noMatchTimeouts[user1.socketId];
     delete noMatchTimeouts[user2.socketId];
 
-    // Randomly decide who initiates (or use user ID comparison)
+    // Mark users as matched
+    activeMatches.set(user1.userId, user2.userId);
+    activeMatches.set(user2.userId, user1.userId);
+
+    // Determine who initiates (consistent logic)
     const user1IsInitiator = user1.userId > user2.userId;
 
     debugLog("Match found! Pairing users.", { 
@@ -57,7 +71,7 @@ const tryToMatchUsers = (io) => {
       initiator: user1IsInitiator ? user1.userId : user2.userId
     });
 
-    // Send with initiator information
+    // Send match notification with initiator information
     io.to(user1.socketId).emit('match-found', { 
       partnerId: user2.userId, 
       isInitiator: user1IsInitiator 
@@ -76,6 +90,24 @@ function getSocketIdByUserId(userId) {
 function debugLog(message, data = null) {
   console.log(`[${new Date().toISOString()}] ${message}`, data ? JSON.stringify(data) : '');
 }
+
+function removeFromPool(userId, socketId) {
+  randomCallPool = randomCallPool.filter(user => user.userId !== userId && user.socketId !== socketId);
+  if (noMatchTimeouts[socketId]) {
+    clearTimeout(noMatchTimeouts[socketId]);
+    delete noMatchTimeouts[socketId];
+  }
+}
+
+function clearMatch(userId) {
+  if (activeMatches.has(userId)) {
+    const partnerId = activeMatches.get(userId);
+    activeMatches.delete(userId);
+    activeMatches.delete(partnerId);
+    debugLog("Cleared match", { userId, partnerId });
+  }
+}
+
 io.on("connection", (socket) => {
   debugLog("User connected", { socketId: socket.id });
 
@@ -109,29 +141,59 @@ io.on("connection", (socket) => {
 
   // --- RANDOM CALL SIGNALING ---
   socket.on('join-random-pool', ({ userId }) => {
+    debugLog("User joining random pool", { userId, socketId: socket.id });
+    
+    // Remove user from pool first (in case they're already there)
+    removeFromPool(userId, socket.id);
+    
+    // Check if user is already matched
+    if (activeMatches.has(userId)) {
+      debugLog("User already matched, not adding to pool", { userId });
+      return;
+    }
+    
+    // Add to pool if not already there
     if (!randomCallPool.some(user => user.userId === userId)) {
       randomCallPool.push({ userId, socketId: socket.id });
+      debugLog("Added user to pool", { userId, poolSize: randomCallPool.length });
+      
+      // Set no-match timeout only if they're alone in the pool
       if (randomCallPool.length === 1) {
         noMatchTimeouts[socket.id] = setTimeout(() => {
           socket.emit('no-match-found');
+          removeFromPool(userId, socket.id);
           debugLog("No match found for user", { userId });
         }, 15000);
       }
+      
+      // Try to match users
       tryToMatchUsers(io);
     }
   });
 
-  socket.on('leave-random-pool', () => {
-    randomCallPool = randomCallPool.filter(user => user.socketId !== socket.id);
-    if (noMatchTimeouts[socket.id]) {
-      clearTimeout(noMatchTimeouts[socket.id]);
-      delete noMatchTimeouts[socket.id];
-    }
+  socket.on('leave-random-pool', ({ userId }) => {
+    debugLog("User leaving random pool", { userId, socketId: socket.id });
+    removeFromPool(userId, socket.id);
+    clearMatch(userId);
   });
 
   socket.on('skip-partner', ({ to }) => {
+    debugLog("User skipping partner", { from: socket.id, to });
     const toSocketId = getSocketIdByUserId(to);
     if (toSocketId) io.to(toSocketId).emit("partner-skipped");
+    
+    // Clear the match and remove both users from active matches
+    let userId = null;
+    for (const [uid, socketId] of Object.entries(userSocketMap)) {
+      if (socketId === socket.id) {
+        userId = uid;
+        break;
+      }
+    }
+    if (userId) {
+      clearMatch(userId);
+      clearMatch(to);
+    }
   });
 
   // --- UNIVERSAL HANDLERS ---
@@ -141,8 +203,22 @@ io.on("connection", (socket) => {
   });
 
   socket.on("hang-up", ({ to }) => {
+    debugLog("Call hang-up", { from: socket.id, to });
     const toSocketId = getSocketIdByUserId(to);
     if (toSocketId) io.to(toSocketId).emit("call-ended");
+    
+    // Clear matches for both users
+    let userId = null;
+    for (const [uid, socketId] of Object.entries(userSocketMap)) {
+      if (socketId === socket.id) {
+        userId = uid;
+        break;
+      }
+    }
+    if (userId) {
+      clearMatch(userId);
+      clearMatch(to);
+    }
   });
 
   // --- WEBRTC SIGNALING ---
@@ -163,12 +239,13 @@ io.on("connection", (socket) => {
 
   // --- DISCONNECT & ERROR ---
   socket.on("disconnect", () => {
+    // Clean up timeouts
     if (noMatchTimeouts[socket.id]) {
       clearTimeout(noMatchTimeouts[socket.id]);
       delete noMatchTimeouts[socket.id];
     }
-    randomCallPool = randomCallPool.filter(user => user.socketId !== socket.id);
-
+    
+    // Find and remove user from all data structures
     let disconnectedUserId = null;
     for (const userId in userSocketMap) {
       if (userSocketMap[userId] === socket.id) {
@@ -177,6 +254,13 @@ io.on("connection", (socket) => {
         break;
       }
     }
+    
+    // Remove from pool and clear matches
+    if (disconnectedUserId) {
+      removeFromPool(disconnectedUserId, socket.id);
+      clearMatch(disconnectedUserId);
+    }
+    
     debugLog("User disconnected", { socketId: socket.id, userId: disconnectedUserId });
   });
 
