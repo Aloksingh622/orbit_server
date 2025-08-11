@@ -37,22 +37,35 @@ const io = new Server(server, {
 const userSocketMap = {};
 let randomCallPool = [];
 const noMatchTimeouts = {};
-
 const tryToMatchUsers = (io) => {
-  debugLog("Attempting to match users", { poolSize: randomCallPool.length });
   while (randomCallPool.length >= 2) {
     const user1 = randomCallPool.shift();
     const user2 = randomCallPool.shift();
 
+    // Clear timeouts
     if (noMatchTimeouts[user1.socketId]) clearTimeout(noMatchTimeouts[user1.socketId]);
     if (noMatchTimeouts[user2.socketId]) clearTimeout(noMatchTimeouts[user2.socketId]);
     delete noMatchTimeouts[user1.socketId];
     delete noMatchTimeouts[user2.socketId];
 
-    debugLog("Match found! Pairing users.", { user1: user1.userId, user2: user2.userId });
+    // Randomly decide who initiates (or use user ID comparison)
+    const user1IsInitiator = user1.userId > user2.userId;
 
-    io.to(user1.socketId).emit('match-found', { partnerId: user2.userId });
-    io.to(user2.socketId).emit('match-found', { partnerId: user1.userId });
+    debugLog("Match found! Pairing users.", { 
+      user1: user1.userId, 
+      user2: user2.userId,
+      initiator: user1IsInitiator ? user1.userId : user2.userId
+    });
+
+    // Send with initiator information
+    io.to(user1.socketId).emit('match-found', { 
+      partnerId: user2.userId, 
+      isInitiator: user1IsInitiator 
+    });
+    io.to(user2.socketId).emit('match-found', { 
+      partnerId: user1.userId, 
+      isInitiator: !user1IsInitiator 
+    });
   }
 };
 
