@@ -35,6 +35,22 @@ const io = new Server(server, {
 });
 
 const userSocketMap = {};
+let randomCallPool = [];
+
+
+const tryToMatchUsers = () => {
+  if (randomCallPool.length >= 2) {
+    // Pull the first two users from the pool
+    const user1 = randomCallPool.shift();
+    const user2 = randomCallPool.shift();
+
+    debugLog("Match found! Pairing users.", { user1: user1.userId, user2: user2.userId });
+
+    // Notify both users about their new partner
+    io.to(user1.socketId).emit('match-found', { partnerId: user2.userId });
+    io.to(user2.socketId).emit('match-found', { partnerId: user1.userId });
+  }
+};
 
 function getSocketIdByUserId(userId) {
   return userSocketMap[userId];
@@ -78,6 +94,21 @@ io.on("connection", (socket) => {
     if (toSocketId) {
       io.to(toSocketId).emit("call-accepted", { from, callType }); // Forward 'from' and 'callType'
     }
+  });
+
+    socket.on('join-random-pool', ({ from }) => {
+    // Avoid adding the same user twice
+    if (!randomCallPool.some(user => user.userId === from)) {
+      debugLog("User joined random call pool", { userId: from });
+      randomCallPool.push({ userId: from, socketId: socket.id });
+      tryToMatchUsers(); // Attempt to find a match
+    }
+  });
+
+  socket.on('leave-random-pool', () => {
+    const userId = Object.keys(userSocketMap).find(key => userSocketMap[key] === socket.id);
+    randomCallPool = randomCallPool.filter(user => user.socketId !== socket.id);
+    debugLog("User left random call pool", { userId });
   });
 
   // In server.js
