@@ -38,26 +38,23 @@ const userSocketMap = {};
 let randomCallPool = [];
 const noMatchTimeouts = {};
 
-
 const tryToMatchUsers = (io) => {
   debugLog("Attempting to match users", { poolSize: randomCallPool.length });
   while (randomCallPool.length >= 2) {
     const user1 = randomCallPool.shift();
     const user2 = randomCallPool.shift();
 
-    // Clear any pending "no match" timeouts for these users
     if (noMatchTimeouts[user1.socketId]) clearTimeout(noMatchTimeouts[user1.socketId]);
     if (noMatchTimeouts[user2.socketId]) clearTimeout(noMatchTimeouts[user2.socketId]);
     delete noMatchTimeouts[user1.socketId];
     delete noMatchTimeouts[user2.socketId];
 
-    debugLog("Match found!", { user1: user1.userId, user2: user2.userId });
+    debugLog("Match found! Pairing users.", { user1: user1.userId, user2: user2.userId });
 
     io.to(user1.socketId).emit('match-found', { partnerId: user2.userId });
     io.to(user2.socketId).emit('match-found', { partnerId: user1.userId });
   }
 };
-
 
 function getSocketIdByUserId(userId) {
   return userSocketMap[userId];
@@ -66,154 +63,99 @@ function getSocketIdByUserId(userId) {
 function debugLog(message, data = null) {
   console.log(`[${new Date().toISOString()}] ${message}`, data ? JSON.stringify(data) : '');
 }
-
 io.on("connection", (socket) => {
   debugLog("User connected", { socketId: socket.id });
 
   socket.on("register", (userId) => {
-    if (!userId) {
-      debugLog("Registration failed: No userId provided", { socketId: socket.id });
-      return;
-    }
+    if (!userId) return;
     userSocketMap[userId] = socket.id;
     debugLog("User registered successfully", { userId, socketId: socket.id });
   });
 
-  // PRE-CALL SIGNALING =====================
-
-  // MODIFICATION 1: Added 'type'
+  // --- DIRECT CALL SIGNALING ---
   socket.on("outgoing-call", ({ from, to, type = 'voice' }) => {
-    debugLog("Outgoing call request", { from, to, type });
     const toSocketId = getSocketIdByUserId(to);
-    if (toSocketId) {
-      io.to(toSocketId).emit("incoming-call", { from, type }); // Forwarding 'type'
-      debugLog("Sending incoming call to recipient", { from, to, toSocketId, type });
-    } else {
-      socket.emit("call-error", { error: "User is not online." });
-      debugLog("Recipient not found", { to });
-    }
+    if (toSocketId) io.to(toSocketId).emit("incoming-call", { from, type });
+    else socket.emit("call-error", { error: "User is not online." });
   });
 
-  // MODIFICATION 2: Richer payload for specific confirmation
   socket.on("call-accepted", ({ from, to, callType }) => {
-    debugLog("Call accepted", { from, to, callType });
     const toSocketId = getSocketIdByUserId(to);
-    if (toSocketId) {
-      io.to(toSocketId).emit("call-accepted", { from, callType }); // Forward 'from' and 'callType'
-    }
+    if (toSocketId) io.to(toSocketId).emit("call-accepted", { from, callType });
   });
 
-   socket.on('join-random-pool', ({ userId }) => {
-    if (!randomCallPool.some(user => user.userId === userId)) {
-      debugLog("User joined random call pool", { userId });
-      randomCallPool.push({ userId, socketId: socket.id });
+  socket.on("call-rejected", ({ from, to }) => {
+    const toSocketId = getSocketIdByUserId(to);
+    if (toSocketId) io.to(toSocketId).emit("call-rejected", { from });
+  });
 
-      // If user is alone in the pool, set a timeout to notify them
+  socket.on("cancel-call", ({ to }) => {
+    const toSocketId = getSocketIdByUserId(to);
+    if (toSocketId) io.to(toSocketId).emit("call-canceled");
+  });
+
+  // --- RANDOM CALL SIGNALING ---
+  socket.on('join-random-pool', ({ userId }) => {
+    if (!randomCallPool.some(user => user.userId === userId)) {
+      randomCallPool.push({ userId, socketId: socket.id });
       if (randomCallPool.length === 1) {
         noMatchTimeouts[socket.id] = setTimeout(() => {
           socket.emit('no-match-found');
           debugLog("No match found for user", { userId });
-        }, 15000); // 15-second timeout
+        }, 15000);
       }
-
       tryToMatchUsers(io);
     }
   });
 
   socket.on('leave-random-pool', () => {
-    const userId = Object.keys(userSocketMap).find(key => userSocketMap[key] === socket.id);
     randomCallPool = randomCallPool.filter(user => user.socketId !== socket.id);
     if (noMatchTimeouts[socket.id]) {
       clearTimeout(noMatchTimeouts[socket.id]);
       delete noMatchTimeouts[socket.id];
     }
-    debugLog("User left random call pool", { userId });
   });
 
-  // ▼▼ NEW HANDLER FOR SKIP ACTION ▼▼
   socket.on('skip-partner', ({ to }) => {
-    debugLog("User skipped partner", { to });
     const toSocketId = getSocketIdByUserId(to);
-    if (toSocketId) {
-      // Notify the other user that their partner skipped
-      io.to(toSocketId).emit("partner-skipped");
-    }
+    if (toSocketId) io.to(toSocketId).emit("partner-skipped");
   });
 
-  // In server.js
-
-socket.on("callee-ready", ({ to }) => {
-  debugLog("Callee is ready, telling caller to initiate", { to });
-  const toSocketId = getSocketIdByUserId(to);
-  if (toSocketId) {
-    // Tell the original caller to start the offer process
-    io.to(toSocketId).emit("initiate-offer", {});
-  }
-});
-socket.on("hang-up", ({ to }) => {
-  debugLog("Hang-up signal received", { to });
-  const toSocketId = getSocketIdByUserId(to);
-  if (toSocketId) {
-    // Notify the other user that the call has ended
-    io.to(toSocketId).emit("call-ended");
-  }
-});
-
-
-  socket.on("call-rejected", ({ from, to }) => { // It's good practice to also send 'from' here
-    debugLog("Call rejected", { from, to });
+  // --- UNIVERSAL HANDLERS ---
+  socket.on("callee-ready", ({ to }) => {
     const toSocketId = getSocketIdByUserId(to);
-    if (toSocketId) {
-      io.to(toSocketId).emit("call-rejected", { from }); // Tell the caller WHO rejected
-    }
+    if (toSocketId) io.to(toSocketId).emit("initiate-offer", {});
   });
 
-  socket.on("cancel-call", ({ to }) => {
-  debugLog("Call canceled by caller", { to });
-  const toSocketId = getSocketIdByUserId(to);
-  if (toSocketId) {
-    // Tell the recipient's modal to close
-    io.to(toSocketId).emit("call-canceled");
-  }
-});
+  socket.on("hang-up", ({ to }) => {
+    const toSocketId = getSocketIdByUserId(to);
+    if (toSocketId) io.to(toSocketId).emit("call-ended");
+  });
 
-
-  // WEBRTC SIGNALING (This part is already correct) ===================
+  // --- WEBRTC SIGNALING ---
   socket.on("webrtc-offer", ({ to, from, offer }) => {
-    debugLog("WebRTC offer received", { to, from });
     const toSocketId = getSocketIdByUserId(to);
-    if (toSocketId) {
-      socket.to(toSocketId).emit("webrtc-offer", { from, offer });
-      debugLog("WebRTC offer forwarded", { to, toSocketId });
-    }
+    if (toSocketId) socket.to(toSocketId).emit("webrtc-offer", { from, offer });
   });
 
   socket.on("webrtc-answer", ({ to, answer }) => {
-    debugLog("WebRTC answer received", { to });
     const toSocketId = getSocketIdByUserId(to);
-    if (toSocketId) {
-      socket.to(toSocketId).emit("webrtc-answer", { answer });
-      debugLog("WebRTC answer forwarded", { to, toSocketId });
-    }
+    if (toSocketId) socket.to(toSocketId).emit("webrtc-answer", { answer });
   });
 
   socket.on("webrtc-candidate", ({ to, candidate }) => {
     const toSocketId = getSocketIdByUserId(to);
-    if (toSocketId) {
-      socket.to(toSocketId).emit("webrtc-candidate", { candidate });
-    }
-  });
-  
-  // OTHER HANDLERS (These are fine) =================================
-  socket.on("end-call", ({ to }) => {
-    debugLog("Call ended", { to });
-    const toSocketId = getSocketIdByUserId(to);
-    if (toSocketId) {
-      io.to(toSocketId).emit("call-ended", {});
-    }
+    if (toSocketId) socket.to(toSocketId).emit("webrtc-candidate", { candidate });
   });
 
+  // --- DISCONNECT & ERROR ---
   socket.on("disconnect", () => {
+    if (noMatchTimeouts[socket.id]) {
+      clearTimeout(noMatchTimeouts[socket.id]);
+      delete noMatchTimeouts[socket.id];
+    }
+    randomCallPool = randomCallPool.filter(user => user.socketId !== socket.id);
+
     let disconnectedUserId = null;
     for (const userId in userSocketMap) {
       if (userSocketMap[userId] === socket.id) {
