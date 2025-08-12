@@ -188,7 +188,6 @@ export const getRandomUnconnectedUsers = async (req, res) => {
 };
 
 
-
 // Follow User
 export const followUser = async (req, res) => {
     try {
